@@ -1,6 +1,7 @@
 import argparse
 import base64
 import binascii
+import datetime
 import io
 import os
 import sys
@@ -164,6 +165,173 @@ class VFS:
             raise VFSError(f"'{path}' - каталог")
         raise VFSError(f"'{path}': нет такого файла")
 
+    # --- Этап 4: навигация по VFS ---
+
+    def resolve(self, cwd, path):
+        """Нормализованный путь (без ведущего '/', '' = корень).
+        Поддерживает абсолютные и относительные пути, '.' и '..'."""
+        parts = [] if path.startswith("/") else (cwd.split("/") if cwd else [])
+        for part in path.split("/"):
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if parts:
+                    parts.pop()
+            else:
+                parts.append(part)
+        return "/".join(parts)
+
+    def is_dir(self, name):
+        return name == "" or name in self.dirs
+
+    def is_file(self, name):
+        return name in self.files
+
+    def listdir(self, name):
+        """Имена элементов каталога name (отсортированы)."""
+        result = []
+        for path in self.dirs | set(self.files):
+            parent, _, base = path.rpartition("/")
+            if parent == name:
+                result.append(base)
+        return sorted(result)
+
+
+# --- Этап 4: команды ls, cd, cat, uname, date ---------------------------------
+
+NO_VFS = "Ошибка: VFS не загружена (укажите --vfs PATH)"
+
+
+def cmd_ls(vfs, cwd, args):
+    """ls [-l] [PATH...]"""
+    if vfs is None:
+        return [NO_VFS]
+    long_format = False
+    paths = []
+    options_done = False
+    for arg in args:
+        if not options_done and arg == "--":
+            options_done = True
+        elif not options_done and arg.startswith("-") and len(arg) > 1:
+            for ch in arg[1:]:
+                if ch != "l":
+                    return [f"ls: invalid option -- '{ch}'"]
+            long_format = True
+        else:
+            paths.append(arg)
+    if not paths:
+        paths = ["."]
+
+    def entry(parent, name):
+        full = f"{parent}/{name}" if parent else name
+        if not long_format:
+            return name
+        if vfs.is_dir(full):
+            return f"d {'-':>6} {name}"
+        return f"- {len(vfs.files[full]):>6} {name}"
+
+    errors, files, dirs = [], [], []
+    for arg in paths:
+        target = vfs.resolve(cwd, arg)
+        if vfs.is_dir(target):
+            dirs.append((arg, target))
+        elif vfs.is_file(target):
+            files.append(entry(target.rpartition("/")[0],
+                               target.rpartition("/")[2]))
+        else:
+            errors.append(f"ls: cannot access '{arg}': No such file or directory")
+
+    lines = list(errors) + files
+    for arg, target in dirs:
+        if lines:
+            lines.append("")
+        if len(paths) > 1:
+            lines.append(f"{arg}:")
+        lines += [entry(target, name) for name in vfs.listdir(target)]
+    return lines
+
+
+def cmd_cd(vfs, cwd, args):
+    """cd [PATH]. Возвращает (новый каталог, строки вывода)."""
+    if vfs is None:
+        return cwd, [NO_VFS]
+    if len(args) > 1:
+        return cwd, ["cd: too many arguments"]
+    target = vfs.resolve(cwd, args[0]) if args else ""  # cd без аргумента - в корень
+    if vfs.is_dir(target):
+        return target, []
+    if vfs.is_file(target):
+        return cwd, [f"cd: {args[0]}: Not a directory"]
+    return cwd, [f"cd: {args[0]}: No such file or directory"]
+
+
+def cmd_cat(vfs, cwd, args):
+    """cat FILE... (двоичные файлы выводятся в base64)"""
+    if vfs is None:
+        return [NO_VFS]
+    if not args:
+        return ["cat: missing file operand"]
+    lines = []
+    for arg in args:
+        target = vfs.resolve(cwd, arg)
+        if vfs.is_file(target):
+            lines += vfs.dump(target)
+        elif vfs.is_dir(target):
+            lines.append(f"cat: {arg}: Is a directory")
+        else:
+            lines.append(f"cat: {arg}: No such file or directory")
+    return lines
+
+
+UNAME_INFO = {
+    "s": "GitflicOS",
+    "n": "gitflic",
+    "r": "1.0",
+    "v": "#1 Emulated",
+    "m": "x86_64",
+}
+
+
+def cmd_uname(args):
+    """uname [-a] [-s] [-n] [-r] [-v] [-m]"""
+    selected = set()
+    for arg in args:
+        if not arg.startswith("-") or len(arg) == 1:
+            return [f"uname: extra operand '{arg}'"]
+        for ch in arg[1:]:
+            if ch == "a":
+                selected |= set(UNAME_INFO)
+            elif ch in UNAME_INFO:
+                selected.add(ch)
+            else:
+                return [f"uname: invalid option -- '{ch}'"]
+    if not selected:
+        selected = {"s"}
+    return [" ".join(UNAME_INFO[ch] for ch in "snrvm" if ch in selected)]
+
+
+def cmd_date(args, now=None):
+    """date [-u] [+FORMAT]"""
+    utc = False
+    fmt = None
+    for arg in args:
+        if arg == "-u":
+            utc = True
+        elif arg.startswith("+"):
+            fmt = arg[1:]
+        elif arg.startswith("-"):
+            return [f"date: invalid option -- '{arg.lstrip('-')}'"]
+        else:
+            return [f"date: invalid date '{arg}'"]
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc if utc
+                                    else None).astimezone()
+        if utc:
+            now = now.astimezone(datetime.timezone.utc)
+    if fmt is not None:
+        return [now.strftime(fmt)]
+    return [f"{now:%a %b} {now.day:2d} {now:%H:%M:%S %Z %Y}"]
+
 
 # ----------------------------------------------------------------------------
 
@@ -173,6 +341,7 @@ class GitflicShellGUI:
         self.root = root
         self.script_commands = []  # Этап 2
         self.vfs = None  # Этап 3
+        self.cwd = ""  # Этап 4: текущий каталог VFS ("" - корень)
 
         # Этап 2: имя VFS в заголовке окна
         root.title(f"Эмулятор - VFS: {vfs_name(vfs_path)}")
@@ -233,7 +402,7 @@ class GitflicShellGUI:
         self.entry.delete(0, tk.END)
 
         # Эхо введённой команды с приглашением
-        self.print_line(f"~gitflic/source$ {raw}")
+        self.print_line(f"{self.prompt.cget('text')} {raw}")
 
         a = raw.split()
         if len(a) == 0:
@@ -247,14 +416,33 @@ class GitflicShellGUI:
         elif cmd == "exit":
             self.root.after(200, self.root.destroy)
         elif cmd == "ls":
-            self.print_line("ls " + " ".join(args))
+            for line in cmd_ls(self.vfs, self.cwd, args):
+                self.print_line(line)
         elif cmd == "cd":
-            self.print_line("cd " + " ".join(args))
+            self.cwd, lines = cmd_cd(self.vfs, self.cwd, args)
+            for line in lines:
+                self.print_line(line)
+            self.update_prompt()
+        elif cmd == "cat":
+            for line in cmd_cat(self.vfs, self.cwd, args):
+                self.print_line(line)
+        elif cmd == "uname":
+            for line in cmd_uname(args):
+                self.print_line(line)
+        elif cmd == "date":
+            for line in cmd_date(args):
+                self.print_line(line)
         elif cmd in ("vfs-info", "vfs-dump"):  # Этап 3: служебные команды
             for line in self.vfs_command(cmd, args):
                 self.print_line(line)
         else:
             self.print_line(f'Command "{cmd}" not found')
+
+    # --- Этап 4: приглашение с текущим каталогом ---
+
+    def update_prompt(self):
+        suffix = f"/{self.cwd}" if self.cwd else ""
+        self.prompt.config(text=f"~gitflic/source{suffix}$")
 
     # --- Этап 3: VFS ---
 

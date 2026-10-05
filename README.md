@@ -3,9 +3,8 @@
 GUI-эмулятор языка оболочки UNIX-подобной ОС. Проект выполняется поэтапно,
 каждый этап фиксируется отдельным коммитом.
 
-> **Текущий этап: Этап 3 — VFS.**
-> Подключена виртуальная файловая система из ZIP-архива (целиком в памяти).
-> Логика `ls`/`cd` — на следующих этапах.
+> **Текущий этап: Этап 4 — Основные команды.**
+> Реализованы `ls`, `cd`, `cat`, `uname`, `date`, работающие с VFS в памяти.
 
 ## 1. Общее описание
 
@@ -32,18 +31,53 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 ### Команды
 
-| Команда          | Поведение                                              |
-| ---------------- | ------------------------------------------------------ |
-| `ls [аргументы]` | заглушка: выводит `ls` и аргументы                     |
-| `cd [аргументы]` | заглушка: выводит `cd` и аргументы                     |
-| `echo [текст]`   | выводит переданный текст                               |
-| `vfs-info`       | служебная: сводка и все элементы VFS (тип и размер)    |
-| `vfs-dump PATH`  | служебная: содержимое файла (двоичный — в base64)      |
-| `exit`           | завершает работу эмулятора                             |
+| Команда | Поведение |
+| ------- | --------- |
+| `ls [-l] [PATH...]` | содержимое каталогов VFS; без аргументов — текущий каталог |
+| `cd [PATH]` | смена текущего каталога; без аргументов — в корень |
+| `cat FILE...` | содержимое файлов (двоичные — в base64) |
+| `uname [-a] [-s] [-n] [-r] [-v] [-m]` | сведения об (эмулируемой) системе |
+| `date [-u] [+FORMAT]` | текущие дата и время |
+| `echo [текст]` | выводит переданный текст |
+| `vfs-info` | служебная: сводка и все элементы VFS |
+| `vfs-dump PATH` | служебная: содержимое файла по пути от корня |
+| `exit` | завершает работу эмулятора |
 
-Ошибки: неизвестная команда — `Command "..." not found`; `vfs-dump` без
-аргумента — `Использование: vfs-dump PATH`; несуществующий путь или каталог —
-`Ошибка: ...`; если VFS не загружена — `Ошибка: VFS не загружена`.
+Пути могут быть абсолютными (`/home/user`) и относительными (`docs/archive`),
+поддерживаются `.` и `..` (выше корня подняться нельзя). Приглашение
+показывает текущий каталог: `~gitflic/source/home/user$`.
+
+**ls**
+- Без аргументов — список текущего каталога; с путями — список каждого
+  (при нескольких путях перед каждым списком печатается `путь:`).
+  Если путь — файл, выводится его имя.
+- `-l` — подробный формат: тип (`d` каталог, `-` файл), размер, имя.
+- Ошибки: `ls: cannot access 'X': No such file or directory`,
+  `ls: invalid option -- 'z'`.
+
+**cd**
+- `cd PATH` меняет каталог, `cd` без аргументов возвращает в корень.
+- Ошибки: `cd: X: No such file or directory`, `cd: X: Not a directory`,
+  `cd: too many arguments`.
+
+**cat**
+- Выводит содержимое файлов подряд; текст как есть, двоичные данные в base64.
+- Ошибки: `cat: X: No such file or directory`, `cat: X: Is a directory`,
+  `cat: missing file operand`.
+
+**uname**
+- Без опций — `GitflicOS` (то же, что `-s`). Опции: `-s` имя системы,
+  `-n` имя узла, `-r` выпуск, `-v` версия, `-m` архитектура, `-a` всё.
+  Опции можно объединять: `uname -mn`. Вывод всегда в порядке s, n, r, v, m.
+- Ошибки: `uname: invalid option -- 'x'`, `uname: extra operand 'X'`.
+
+**date**
+- Без аргументов: `Mon Oct  5 10:42:34 UTC 2026`. `-u` — время в UTC,
+  `+FORMAT` — свой формат (как в `strftime`): `date +%Y-%m-%d`.
+- Ошибки: `date: invalid option -- 'x'`, `date: invalid date 'X'`.
+
+Прочие ошибки: неизвестная команда — `Command "..." not found`; если VFS не
+загружена, команды работы с файлами сообщают `Ошибка: VFS не загружена`.
 
 ### Параметры командной строки
 
@@ -57,7 +91,7 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 ### Стартовый скрипт
 
-- Текстовый файл, по одной команде в строке (полный тест: `src/start`).
+- Текстовый файл, по одной команде в строке (полный тест всех команд: `src/start`).
 - Комментарии начинаются с `#` (строка целиком или хвост строки); пустые
   строки пропускаются.
 - На экране отображаются и ввод (с приглашением), и вывод, с небольшой
@@ -109,21 +143,31 @@ $ ./run.sh --vfs src/vfs/deep.zip --script src/start
 [debug]   --vfs    = src/vfs/deep.zip (найден)
 [debug]   --script = src/start (найден)
 [debug] VFS загружена в память: файлов 5, каталогов 8
-~gitflic/source$ vfs-info
-Файлов: 5, каталогов: 8
-/bin/
-/bin/tool.bin  (binary, 12 B)
-...
-~gitflic/source$ vfs-dump /home/user/notes.txt
-my notes
-~gitflic/source$ vfs-dump /bin/tool.bin
+~gitflic/source$ ls -l
+d      - bin
+d      - etc
+d      - home
+d      - tmp
+~gitflic/source$ cd /home/user/docs
+~gitflic/source/home/user/docs$ ls
+archive
+report.txt
+~gitflic/source/home/user/docs$ cat report.txt
+quarterly report
+~gitflic/source/home/user/docs$ cat /bin/tool.bin
 AAECA//+/YBAIBAI
-~gitflic/source$ vfs-dump /no/such/file
-Ошибка: '/no/such/file': нет такого файла
-~gitflic/source$ vfs-dump /home/user/docs
-Ошибка: '/home/user/docs' - каталог
-~gitflic/source$ exit
+~gitflic/source/home/user/docs$ cd /etc/app.conf
+cd: /etc/app.conf: Not a directory
+~gitflic/source/home/user/docs$ cat nofile.txt
+cat: nofile.txt: No such file or directory
+~gitflic/source/home/user/docs$ uname -a
+GitflicOS gitflic 1.0 #1 Emulated x86_64
+~gitflic/source/home/user/docs$ date +%Y-%m-%d
+2026-10-05
+~gitflic/source/home/user/docs$ exit
 ```
+
+Все режимы команд и ошибки собраны в стартовом скрипте `src/start`.
 
 ## Структура репозитория
 

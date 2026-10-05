@@ -1,31 +1,87 @@
-# Стартовый скрипт: тест всех команд этапов 1-3
+# Стартовый скрипт: тест всех команд (этапы 1-4)
 # Запуск: ./run.sh --vfs src/vfs/deep.zip --script src/start
 # Строки, начинающиеся с #, - комментарии; пустые строки пропускаются
 
-# --- Этап 1: команды-заглушки и echo ---
-ls
-ls dir1 dir2        # комментарий после команды
-cd /home/user
-cd
+# ===== echo, неизвестная команда =====
 echo hello world
-
-# ошибка: неизвестная команда (скрипт продолжит работу)
 unknown_cmd arg
 
-# --- Этап 3: VFS (служебные команды) ---
-# содержимое всей VFS: каталоги, файлы, тип и размер
-vfs-info
+# ===== ls =====
+# без аргументов: корень VFS
+ls
+# подробный формат: тип, размер, имя
+ls -l
+# с путём: абсолютным и относительным
+ls /home/user
+ls etc
+# пустой каталог
+ls /tmp
+# несколько путей сразу
+ls /etc /bin
+# файл вместо каталога
+ls /etc/app.conf
+# ошибки: нет такого пути, неверная опция
+ls /no/such/dir
+ls -z
 
-# текстовые файлы (с ведущим / и без него)
-vfs-dump /home/user/notes.txt
-vfs-dump home/user/docs/archive/2024/log.txt
+# ===== cd =====
+cd /home/user
+ls
+# относительный путь, вложенный на несколько уровней
+cd docs/archive/2024
+ls -l
+# на уровень выше и через несколько уровней
+cd ..
+cd ../..
+# . и .. выше корня остаются в корне
+cd /
+cd ../..
+# без аргумента - в корень
+cd /home/user/docs
+cd
+ls
+# ошибки: файл, нет такого каталога, много аргументов
+cd /etc/app.conf
+cd /no/such/dir
+cd /etc /bin
 
+# ===== cat =====
+cd /home/user
+# текстовый файл (относительный и абсолютный путь)
+cat notes.txt
+cat /etc/app.conf
+# несколько файлов подряд
+cat docs/report.txt docs/archive/2024/log.txt
 # двоичный файл выводится в base64
-vfs-dump /bin/tool.bin
+cat /bin/tool.bin
+# ошибки: каталог, нет файла, без аргументов
+cat docs
+cat nofile.txt
+cat
 
-# --- Ошибки VFS ---
+# ===== uname =====
+uname
+uname -s
+uname -a
+uname -s -r
+uname -mn
+# ошибки: неверная опция, лишний операнд
+uname -x
+uname extra
+
+# ===== date =====
+date
+date -u
+date +%Y-%m-%d
+date +%H:%M
+# ошибки: неверная опция, неверная дата
+date -x
+date tomorrow
+
+# ===== служебные команды VFS (этап 3) =====
+vfs-info
+vfs-dump /home/user/notes.txt
 vfs-dump /no/such/file
-vfs-dump /home/user/docs
 vfs-dump
 
 exit
