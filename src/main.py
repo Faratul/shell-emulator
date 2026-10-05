@@ -1,7 +1,11 @@
 import argparse
+import base64
+import binascii
+import io
 import os
 import sys
 import tkinter as tk
+import zipfile
 from tkinter import scrolledtext
 
 
@@ -14,7 +18,7 @@ STEP_DELAY_MS = 400  # пауза между строками стартовог
 def parse_args(argv=None):
     """Параметры командной строки: путь к VFS и путь к стартовому скрипту."""
     parser = argparse.ArgumentParser(
-        prog="app.py",
+        prog="main.py",
         description="GUI-эмулятор командной строки UNIX-подобной ОС.",
     )
     parser.add_argument("--vfs", metavar="PATH",
@@ -57,6 +61,110 @@ def load_script(path):
     return commands
 
 
+# --- Этап 3: виртуальная файловая система (всё хранится в памяти) -----------
+
+class VFSError(Exception):
+    """Ошибка загрузки или чтения VFS."""
+
+
+class VFS:
+    """VFS из ZIP-архива. Архив читается в память и никуда не распаковывается.
+
+    files: путь без ведущего '/' -> содержимое (bytes)
+    dirs:  множество путей каталогов (корень не хранится)
+    """
+
+    def __init__(self):
+        self.files = {}
+        self.dirs = set()
+
+    # --- загрузка ---
+
+    @classmethod
+    def from_path(cls, path):
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            raise VFSError(f"не удалось открыть '{path}': {e.strerror}")
+        return cls.from_bytes(data)
+
+    @classmethod
+    def from_bytes(cls, data):
+        """data - ZIP-архив либо его представление в base64 (текст)."""
+        if not data.startswith(b"PK"):
+            try:
+                data = base64.b64decode(b"".join(data.split()), validate=True)
+            except (binascii.Error, ValueError):
+                raise VFSError("файл не является ZIP-архивом (и не base64)")
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile:
+            raise VFSError("файл не является корректным ZIP-архивом")
+
+        vfs = cls()
+        with archive:
+            for info in archive.infolist():
+                name = info.filename.strip("/")
+                if not name:
+                    continue
+                if info.is_dir():
+                    vfs._add_dir(name)
+                    continue
+                try:
+                    content = archive.read(info)
+                except (RuntimeError, NotImplementedError,
+                        zipfile.BadZipFile) as e:
+                    raise VFSError(f"не удалось прочитать '{name}': {e}")
+                vfs._add_file(name, content)
+        return vfs
+
+    def _add_dir(self, name):
+        parts = name.split("/")
+        for i in range(1, len(parts) + 1):
+            self.dirs.add("/".join(parts[:i]))
+
+    def _add_file(self, name, content):
+        if "/" in name:
+            self._add_dir(name.rsplit("/", 1)[0])
+        self.files[name] = content
+
+    # --- служебные операции ---
+
+    @staticmethod
+    def is_text(data):
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        return True
+
+    def describe(self):
+        """Список строк: сводка и все элементы VFS."""
+        lines = [f"Файлов: {len(self.files)}, каталогов: {len(self.dirs)}"]
+        for path in sorted(self.dirs | set(self.files)):
+            if path in self.files:
+                data = self.files[path]
+                kind = "text" if self.is_text(data) else "binary"
+                lines.append(f"/{path}  ({kind}, {len(data)} B)")
+            else:
+                lines.append(f"/{path}/")
+        return lines
+
+    def dump(self, path):
+        """Содержимое файла: текст как есть, двоичные данные в base64."""
+        name = path.strip("/")
+        if name in self.files:
+            data = self.files[name]
+            if self.is_text(data):
+                return data.decode("utf-8").splitlines() or [""]
+            encoded = base64.b64encode(data).decode("ascii")
+            return [encoded[i:i + 76] for i in range(0, len(encoded), 76)]
+        if name == "" or name in self.dirs:
+            raise VFSError(f"'{path}' - каталог")
+        raise VFSError(f"'{path}': нет такого файла")
+
+
 # ----------------------------------------------------------------------------
 
 
@@ -64,6 +172,7 @@ class GitflicShellGUI:
     def __init__(self, root, vfs_path=None, script_path=None):
         self.root = root
         self.script_commands = []  # Этап 2
+        self.vfs = None  # Этап 3
 
         # Этап 2: имя VFS в заголовке окна
         root.title(f"Эмулятор - VFS: {vfs_name(vfs_path)}")
@@ -107,6 +216,8 @@ class GitflicShellGUI:
         for line in format_debug(vfs_path, script_path):
             print(line, flush=True)
             self.print_line(line)
+        if vfs_path:  # Этап 3: загрузка VFS в память
+            self.load_vfs(vfs_path)
         if script_path:
             self.start_script(script_path)
 
@@ -139,8 +250,37 @@ class GitflicShellGUI:
             self.print_line("ls " + " ".join(args))
         elif cmd == "cd":
             self.print_line("cd " + " ".join(args))
+        elif cmd in ("vfs-info", "vfs-dump"):  # Этап 3: служебные команды
+            for line in self.vfs_command(cmd, args):
+                self.print_line(line)
         else:
             self.print_line(f'Command "{cmd}" not found')
+
+    # --- Этап 3: VFS ---
+
+    def load_vfs(self, path):
+        try:
+            self.vfs = VFS.from_path(path)
+        except VFSError as e:
+            self.print_line(f"Ошибка VFS: {e}")
+            return
+        msg = (f"[debug] VFS загружена в память: файлов {len(self.vfs.files)}, "
+               f"каталогов {len(self.vfs.dirs)}")
+        print(msg, flush=True)
+        self.print_line(msg)
+
+    def vfs_command(self, cmd, args):
+        """vfs-info - содержимое VFS; vfs-dump PATH - содержимое файла."""
+        if self.vfs is None:
+            return ["Ошибка: VFS не загружена (укажите --vfs PATH)"]
+        if cmd == "vfs-info":
+            return self.vfs.describe()
+        if len(args) != 1:
+            return ["Использование: vfs-dump PATH"]
+        try:
+            return self.vfs.dump(args[0])
+        except VFSError as e:
+            return [f"Ошибка: {e}"]
 
     # --- Этап 2: стартовый скрипт ---
 
