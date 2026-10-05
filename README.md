@@ -3,8 +3,9 @@
 GUI-эмулятор языка оболочки UNIX-подобной ОС. Проект выполняется поэтапно,
 каждый этап фиксируется отдельным коммитом.
 
-> **Текущий этап: Этап 4 — Основные команды.**
-> Реализованы `ls`, `cd`, `cat`, `uname`, `date`, работающие с VFS в памяти.
+> **Текущий этап: Этап 5 — Дополнительные команды.**
+> Добавлена команда `rmdir`, изменяющая VFS только в памяти (архив на диске
+> не затрагивается).
 
 ## 1. Общее описание
 
@@ -38,6 +39,7 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 | `cat FILE...` | содержимое файлов (двоичные — в base64) |
 | `uname [-a] [-s] [-n] [-r] [-v] [-m]` | сведения об (эмулируемой) системе |
 | `date [-u] [+FORMAT]` | текущие дата и время |
+| `rmdir [-p] [-v] DIR...` | удаление пустых каталогов (только в памяти) |
 | `echo [текст]` | выводит переданный текст |
 | `vfs-info` | служебная: сводка и все элементы VFS |
 | `vfs-dump PATH` | служебная: содержимое файла по пути от корня |
@@ -76,6 +78,18 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
   `+FORMAT` — свой формат (как в `strftime`): `date +%Y-%m-%d`.
 - Ошибки: `date: invalid option -- 'x'`, `date: invalid date 'X'`.
 
+**rmdir**
+- Удаляет пустые каталоги. Изменение происходит только в памяти — исходный
+  ZIP не меняется; `vfs-info`, `ls`, `cd`, `cat` сразу видят результат.
+- `-v` — печатать `rmdir: removing directory, 'X'` для каждого удалённого
+  каталога; `-p` — удалить также родительские каталоги, пока они пусты
+  (`rmdir -p a/b/c` удалит `a/b/c`, `a/b`, `a`). Опции можно объединять: `-pv`.
+- Можно указать несколько каталогов; ошибка по одному не мешает остальным.
+- Ошибки: `rmdir: failed to remove 'X': No such file or directory`,
+  `... Not a directory`, `... Directory not empty`,
+  `... Device or resource busy` (корень `/` и текущий каталог удалить нельзя),
+  `rmdir: missing operand`, `rmdir: invalid option -- 'x'`.
+
 Прочие ошибки: неизвестная команда — `Command "..." not found`; если VFS не
 загружена, команды работы с файлами сообщают `Ошибка: VFS не загружена`.
 
@@ -91,7 +105,7 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 ### Стартовый скрипт
 
-- Текстовый файл, по одной команде в строке (полный тест всех команд: `src/start`).
+- Текстовый файл, по одной команде в строке (команды этапов 1–4: `src/start`, `rmdir`: `src/start_rmdir`).
 - Комментарии начинаются с `#` (строка целиком или хвост строки); пустые
   строки пропускаются.
 - На экране отображаются и ввод (с приглашением), и вывод, с небольшой
@@ -108,6 +122,7 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 | `deep.zip`     | 3+ уровня вложенности (`home/user/docs/archive/2024/...`)   |
 | `deep.b64`     | тот же `deep.zip` в виде base64-текста                      |
 | `not_a_zip.txt`| некорректный VFS (проверка ошибок)                          |
+| `rmdir.zip`    | пустые каталоги и цепочки для проверки `rmdir`              |
 
 
 ## 3. Сборка и запуск
@@ -116,7 +131,8 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 ```bash
 ./run.sh                                              # без параметров
-./run.sh --vfs src/vfs/deep.zip --script src/start    # полный тест команд
+./run.sh --vfs src/vfs/deep.zip --script src/start    # тест команд этапов 1-4
+./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir  # тест rmdir
 ```
 
 Скрипты ОС для проверки параметров и вариантов VFS (папка `scripts/`):
@@ -167,7 +183,20 @@ GitflicOS gitflic 1.0 #1 Emulated x86_64
 ~gitflic/source/home/user/docs$ exit
 ```
 
-Все режимы команд и ошибки собраны в стартовом скрипте `src/start`.
+Все режимы команд и ошибки собраны в стартовых скриптах `src/start` и
+`src/start_rmdir`. Пример `rmdir`:
+
+```
+$ ./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir
+~gitflic/source$ rmdir -pv chain/one
+rmdir: removing directory, 'chain/one'
+rmdir: removing directory, 'chain'
+~gitflic/source$ rmdir -pv mixed/sub
+rmdir: removing directory, 'mixed/sub'
+rmdir: failed to remove 'mixed': Directory not empty
+~gitflic/source$ rmdir full
+rmdir: failed to remove 'full': Directory not empty
+```
 
 ## Структура репозитория
 
@@ -176,7 +205,8 @@ GitflicOS gitflic 1.0 #1 Emulated x86_64
 ├── src/
 │   ├── vfs/        # тестовые VFS (ZIP, base64)
 │   ├── main.py     # эмулятор
-│   └── start       # стартовый скрипт
+│   ├── start       # стартовый скрипт (этапы 1-4)
+│   └── start_rmdir # стартовый скрипт для rmdir (этап 5)
 ├── scripts/        # скрипты ОС для проверки параметров и VFS
 ├── tests/          # (заглушка)
 ├── .gitignore

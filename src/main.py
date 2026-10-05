@@ -196,6 +196,12 @@ class VFS:
                 result.append(base)
         return sorted(result)
 
+    # --- Этап 5: изменение VFS (только в памяти) ---
+
+    def remove_dir(self, name):
+        """Удалить пустой каталог. Архив на диске не затрагивается."""
+        self.dirs.discard(name)
+
 
 # --- Этап 4: команды ls, cd, cat, uname, date ---------------------------------
 
@@ -333,6 +339,63 @@ def cmd_date(args, now=None):
     return [f"{now:%a %b} {now.day:2d} {now:%H:%M:%S %Z %Y}"]
 
 
+# --- Этап 5: команда rmdir ------------------------------------------------------
+
+def cmd_rmdir(vfs, cwd, args):
+    """rmdir [-p] [-v] DIR... - удаляет пустые каталоги (только в памяти)"""
+    if vfs is None:
+        return [NO_VFS]
+    parents = verbose = False
+    paths = []
+    options_done = False
+    for arg in args:
+        if not options_done and arg == "--":
+            options_done = True
+        elif not options_done and arg.startswith("-") and len(arg) > 1:
+            for ch in arg[1:]:
+                if ch == "p":
+                    parents = True
+                elif ch == "v":
+                    verbose = True
+                else:
+                    return [f"rmdir: invalid option -- '{ch}'"]
+        else:
+            paths.append(arg)
+    if not paths:
+        return ["rmdir: missing operand"]
+
+    def try_remove(shown):
+        """Удалить каталог; вернуть текст ошибки или None."""
+        target = vfs.resolve(cwd, shown)
+        if vfs.is_file(target):
+            return "Not a directory"
+        if not vfs.is_dir(target):
+            return "No such file or directory"
+        if target == "" or target == cwd:  # корень и текущий каталог
+            return "Device or resource busy"
+        if vfs.listdir(target):
+            return "Directory not empty"
+        vfs.remove_dir(target)
+        return None
+
+    lines = []
+    for arg in paths:
+        shown = arg.rstrip("/") or "/"
+        while True:
+            error = try_remove(shown)
+            if error:
+                lines.append(f"rmdir: failed to remove '{shown}': {error}")
+                break
+            if verbose:
+                lines.append(f"rmdir: removing directory, '{shown}'")
+            if not parents:
+                break
+            shown = shown.rpartition("/")[0]  # с -p удаляем и родителей
+            if not shown:
+                break
+    return lines
+
+
 # ----------------------------------------------------------------------------
 
 
@@ -431,6 +494,9 @@ class GitflicShellGUI:
                 self.print_line(line)
         elif cmd == "date":
             for line in cmd_date(args):
+                self.print_line(line)
+        elif cmd == "rmdir":
+            for line in cmd_rmdir(self.vfs, self.cwd, args):
                 self.print_line(line)
         elif cmd in ("vfs-info", "vfs-dump"):  # Этап 3: служебные команды
             for line in self.vfs_command(cmd, args):

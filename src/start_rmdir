@@ -1,0 +1,52 @@
+# Стартовый скрипт: команда rmdir (этап 5)
+# Запуск: ./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir
+# Все изменения VFS выполняются только в памяти: архив на диске не меняется
+
+# ===== исходное состояние =====
+ls
+
+# ===== rmdir: удаление пустого каталога =====
+rmdir empty1
+ls
+# абсолютный путь и несколько каталогов за один вызов
+rmdir /empty2 /chain/one/two/three
+ls /chain/one/two
+
+# ===== -v: подробный вывод =====
+rmdir -v chain/one/two
+
+# ===== -p: удалить каталог вместе с пустыми родителями =====
+rmdir -pv chain/one
+ls
+# родитель не пуст: удалится только sub, для mixed будет ошибка
+rmdir -pv mixed/sub
+ls mixed
+
+# ===== ошибки =====
+# каталог не пуст
+rmdir full
+# это файл
+rmdir readme.txt
+# нет такого пути
+rmdir nothing
+# нет операнда и неверная опция
+rmdir
+rmdir -x
+# корень и текущий каталог удалить нельзя
+rmdir /
+cd workdir
+rmdir .
+rmdir /workdir
+cd /
+
+# несколько операндов: ошибка не мешает удалить остальные
+rmdir nothing workdir
+ls
+
+# ===== удалённого каталога больше нет =====
+cd empty1
+cat empty1
+ls -l
+vfs-info
+
+exit
