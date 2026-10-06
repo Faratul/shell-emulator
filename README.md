@@ -4,8 +4,8 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 каждый этап фиксируется отдельным коммитом.
 
 > **Текущий этап: Этап 5 — Дополнительные команды.**
-> Добавлена команда `rmdir`, изменяющая VFS только в памяти (архив на диске
-> не затрагивается).
+> Реализованы `ls`, `cd`, `cat`, `uname`, `date`, `rmdir`; VFS хранится в
+> памяти и изменяется только в памяти.
 
 ## 1. Общее описание
 
@@ -20,11 +20,13 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 - Источник VFS — ZIP-архив (`--vfs PATH`). Архив целиком читается в память;
   на диск ничего не распаковывается и не изменяется.
+- Архив можно передать как есть или в виде **base64-текста**: файл, не
+  начинающийся с `PK`, декодируется из base64. Тестовые VFS в репозитории
+  хранятся в base64, поэтому в нём нет бинарных файлов и архивов.
+- Двоичные файлы внутри VFS при выводе (`cat`, `vfs-dump`) представляются
+  в base64.
 - Каталоги, которых нет в архиве явными записями, восстанавливаются по путям
   файлов.
-- Архив можно передать и в виде **base64-текста** (файл, не начинающийся с
-  `PK`, декодируется как base64). Двоичные файлы внутри VFS при выводе
-  представляются в base64.
 - Ошибки загрузки (файла нет, это каталог, не ZIP/не base64, повреждённый
   архив) выводятся в консоль эмулятора; приложение продолжает работу без VFS.
 
@@ -97,7 +99,7 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 | Параметр        | Описание                              |
 | --------------- | ------------------------------------- |
-| `--vfs PATH`    | путь к ZIP-архиву VFS (или его base64)|
+| `--vfs PATH`    | путь к ZIP-архиву VFS или его base64  |
 | `--script PATH` | путь к стартовому скрипту             |
 
 При запуске все параметры выводятся отладочными строками `[debug] ...` — в
@@ -113,17 +115,15 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 - Ошибочная команда выводит сообщение, скрипт продолжает работу. Если скрипт
   не найден — сообщение об ошибке, эмулятор остаётся интерактивным.
 
-### Тестовые VFS (`src/vfs/`)
+### Тестовые VFS (`src/vfs/`, base64-текст)
 
-| Файл           | Назначение                                                  |
-| -------------- | ----------------------------------------------------------- |
-| `minimal.zip`  | минимальный: один файл                                      |
-| `multi.zip`    | несколько файлов, один двоичный                             |
-| `deep.zip`     | 3+ уровня вложенности (`home/user/docs/archive/2024/...`)   |
-| `deep.b64`     | тот же `deep.zip` в виде base64-текста                      |
-| `not_a_zip.txt`| некорректный VFS (проверка ошибок)                          |
-| `rmdir.zip`    | пустые каталоги и цепочки для проверки `rmdir`              |
-
+| Файл            | Назначение                                                 |
+| --------------- | ---------------------------------------------------------- |
+| `minimal.b64`   | минимальный: один файл                                     |
+| `multi.b64`     | несколько файлов, один двоичный                            |
+| `deep.b64`      | 3+ уровня вложенности (`home/user/docs/archive/2024/...`)  |
+| `rmdir.b64`     | пустые каталоги и цепочки для проверки `rmdir`             |
+| `not_a_zip.txt` | некорректный VFS (проверка ошибок)                         |
 
 ## 3. Сборка и запуск
 
@@ -131,8 +131,8 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 
 ```bash
 ./run.sh                                              # без параметров
-./run.sh --vfs src/vfs/deep.zip --script src/start    # тест команд этапов 1-4
-./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir  # тест rmdir
+./run.sh --vfs src/vfs/deep.b64 --script src/start    # тест команд этапов 1-4
+./run.sh --vfs src/vfs/rmdir.b64 --script src/start_rmdir  # тест rmdir
 ```
 
 Скрипты ОС для проверки параметров и вариантов VFS (папка `scripts/`):
@@ -141,22 +141,23 @@ GUI-эмулятор языка оболочки UNIX-подобной ОС. П�
 scripts/test_no_params.sh        # без параметров (окно закрыть вручную)
 scripts/test_script.sh           # только --script (VFS нет)
 scripts/test_script_missing.sh   # несуществующий скрипт
-scripts/test_all_params.sh       # --vfs deep.zip + src/start
+scripts/test_all_params.sh       # --vfs deep.b64 + src/start
 scripts/test_vfs_minimal.sh      # минимальный VFS
 scripts/test_vfs_multi.sh        # несколько файлов, двоичный файл
 scripts/test_vfs_deep.sh         # 3+ уровня вложенности
-scripts/test_vfs_base64.sh       # ZIP в виде base64
+scripts/test_vfs_zip.sh          # настоящий ZIP (создаётся временно)
 scripts/test_vfs_not_zip.sh      # ошибка: не архив
 scripts/test_vfs_missing.sh      # ошибка: файла нет
 scripts/test_vfs_dir.sh          # ошибка: передан каталог
+scripts/test_rmdir.sh            # rmdir: все режимы и ошибки
 ```
 
 ## 4. Примеры использования
 
 ```
-$ ./run.sh --vfs src/vfs/deep.zip --script src/start
+$ ./run.sh --vfs src/vfs/deep.b64 --script src/start
 [debug] Параметры запуска:
-[debug]   --vfs    = src/vfs/deep.zip (найден)
+[debug]   --vfs    = src/vfs/deep.b64 (найден)
 [debug]   --script = src/start (найден)
 [debug] VFS загружена в память: файлов 5, каталогов 8
 ~gitflic/source$ ls -l
@@ -187,7 +188,7 @@ GitflicOS gitflic 1.0 #1 Emulated x86_64
 `src/start_rmdir`. Пример `rmdir`:
 
 ```
-$ ./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir
+$ ./run.sh --vfs src/vfs/rmdir.b64 --script src/start_rmdir
 ~gitflic/source$ rmdir -pv chain/one
 rmdir: removing directory, 'chain/one'
 rmdir: removing directory, 'chain'
@@ -203,12 +204,12 @@ rmdir: failed to remove 'full': Directory not empty
 ```
 .
 ├── src/
-│   ├── vfs/        # тестовые VFS (ZIP, base64)
+│   ├── vfs/        # тестовые VFS (base64-текст)
 │   ├── main.py     # эмулятор
-│   ├── start       # стартовый скрипт (этапы 1-4)
+│   ├── start       # стартовый скрипт (все команды этапов 1-4)
 │   └── start_rmdir # стартовый скрипт для rmdir (этап 5)
 ├── scripts/        # скрипты ОС для проверки параметров и VFS
-├── tests/          # (заглушка)
+├── tests/
 ├── .gitignore
 ├── README.md
 └── run.sh
