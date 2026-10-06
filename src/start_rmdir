@@ -1,5 +1,5 @@
 # Стартовый скрипт: команда rmdir (этап 5)
-# Запуск: ./run.sh --vfs src/vfs/rmdir.zip --script src/start_rmdir
+# Запуск: ./run.sh --vfs src/vfs/rmdir.b64 --script src/start_rmdir
 # Все изменения VFS выполняются только в памяти: архив на диске не меняется
 
 # ===== исходное состояние =====
